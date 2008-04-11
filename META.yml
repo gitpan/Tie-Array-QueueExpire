@@ -1,0 +1,12 @@
+--- #YAML:1.0
+name:                Tie-Array-QueueExpire
+version:             0.38
+abstract:            Tie::Array::QueueExpire Is a tie ARRAY over a TokyoCabinet::BDB database with expiration function
+license:             ~
+generated_by:        ExtUtils::MakeMaker version 6.36
+distribution_type:   module
+requires:     
+    TokyoCabinet:                  Time::HiRes
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
+    version: 1.2

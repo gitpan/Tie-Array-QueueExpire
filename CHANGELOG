@@ -1,0 +1,12 @@
+----------------------------
+revision : 0.38
+date : 2008/4/11 13:05:33
+add MODE creation for the DB file when tying
+----------------------------
+revision : 0.37
+date : 2008/4/11 10:28:15
+add SPLICE feature
+----------------------------revision : 0.36
+date : 2008/4/10 18:56:37
+first full functional version
+----------------------------
