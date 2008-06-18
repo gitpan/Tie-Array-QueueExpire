@@ -43,7 +43,6 @@ print_diff( \@tmp, \@tmp_t );
 #print Dumper(\@tmp_t);
 
 
-
 for ( 0 .. $#myarray )
 {
     print "data in $_ =" . $myarray[$_] . "\n";
@@ -51,15 +50,18 @@ for ( 0 .. $#myarray )
 
 
 my $data = shift @myarray;
-
+my $data_t  = shift @test;
 print "-+-+-+-+--+shifted data=$data\n";
 
-print "array after shift " .Dumper( \@myarray );
+
+
+print_diff( \@myarray, \@test );
 
 my $data = pop @myarray;
+my $data_t  = pop @test;
 print "-+-+-+-+--+poped data=$data\n";
 
-print "array after pop " .Dumper( \@myarray );
+print_diff( \@myarray, \@test );
 
 print "is lement 6 exist ?<" . exists( $myarray[6] ) . "> val is<" . $myarray[6] . ">\n";
 
@@ -75,6 +77,7 @@ if ( $exp )
 }
 
 print "After expiration " .Dumper( \@myarray );
+$t->OPTIMIZE();
 
 sub print_diff
 {

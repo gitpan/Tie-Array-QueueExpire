@@ -3,8 +3,8 @@ package Tie::Array::QueueExpire;
 # Tie::Array::QueueExpire package
 # Gnu GPL2 license
 #
-# $Id: QueueExpire.pm 38 2008-04-11 11:05:15Z fabrice $
-# $Revision: 38 $
+# $Id: QueueExpire.pm 49 2008-06-18 07:54:31Z fabrice $
+# $Revision: 49 $
 #
 # Fabrice Dulaunoy <fabrice@dulaunoy.com>
 ###########################################################
@@ -15,7 +15,7 @@ package Tie::Array::QueueExpire;
 =head1  Tie::Array::QueueExpire - Introduction
 
   Tie::Array::QueueExpire - Tie an ARRAY over a TokyCabinet Btree DB ( see http://tokyocabinet.sourceforge.net )
-  $Revision: 38 $
+  $Revision: 49 $
 
 =head1 SYNOPSIS
 
@@ -50,7 +50,8 @@ package Tie::Array::QueueExpire;
   exits
   scalar
   clear
-  
+  unshift  (but put data 1 second before the first entry)
+
   The following function is not completely iplemented.
   
   splice
@@ -59,7 +60,6 @@ package Tie::Array::QueueExpire;
   
   extend
   store
-  unshift
   STORESIZE
 
   The following function are specific of this module.
@@ -84,7 +84,7 @@ use TokyoCabinet;
 
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 
-$VERSION = sprintf "0.%02d", '$Revision: 38 $ ' =~ /(\d+)/;
+$VERSION = sprintf "0.%02d", '$Revision: 49 $ ' =~ /(\d+)/;
 
 our @ISA = qw( Exporter Tie::StdArray );
 
@@ -128,6 +128,7 @@ sub TIEARRAY
       
 =cut
 
+
 sub FETCH
 {
     my $self = shift;
@@ -135,11 +136,7 @@ sub FETCH
     my $bdb  = $self->{ _bdb };
     return undef unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->first();
-    for ( 1 .. $key )
-    {
-        $cur->next();
-    }
+    my $status = $cur->jump($key);
     return $cur->val();
 }
 
@@ -157,11 +154,7 @@ sub FETCHTIME
     my $bdb  = $self->{ _bdb };
     return undef unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->first();
-    for ( 1 .. $key )
-    {
-        $cur->next();
-    }
+    my $status = $cur->jump($key);
     return $cur->val(), $cur->key();
 }
 
@@ -181,7 +174,7 @@ sub FETCHSIZE
 
 =head2 PUSH
 	
-	Add an element in the array array
+	Add an element at the end of the array
 	push @myarray , 45646;
       
 =cut
@@ -208,12 +201,7 @@ sub EXISTS
     my $bdb  = $self->{ _bdb };
     return 0 unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->first();
-    for ( 1 .. $key )
-    {
-        $cur->next();
-    }
-    return $cur->val() ? 1 : 0;
+    return $cur->jump($key);
 }
 
 =head2 POP
@@ -247,6 +235,22 @@ sub SHIFT
     $bdb->out( $self->FIRST() );
     return $data;
 }
+
+=head2 UNSHIFT
+	
+	Add an element in the front of the array
+	unshift @myarray , 45646;
+	UNSHIFT data 1 second before the first item
+	
+=cut
+
+sub UNSHIFT {
+    my $self  = shift;
+    my $value = shift;
+    my $bdb   = $self->{ _bdb };
+    my $first = $bdb->get( $self->FIRST() );
+    $bdb->put( $first-1, $value );
+ }
 
 =head2 CLEAR
 	
@@ -460,14 +464,6 @@ sub EXTEND { carp "no EXTEND function"; }
 =cut
 
 sub STORE { carp "no STORE function"; }
-
-=head2 UNSHIFT
-	
-	Not implemented because not signifiant for a expiration queue
-	
-=cut
-
-sub UNSHIFT { carp "no UNSHIFT function"; }
 
 =head2 STORESIZE
 	

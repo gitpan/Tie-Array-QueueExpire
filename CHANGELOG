@@ -1,4 +1,8 @@
 ----------------------------
+revision : 0.48
+date : 2008/6/16 15:00:42
+add UNSHIFT feature
+----------------------------
 revision : 0.38
 date : 2008/4/11 13:05:33
 add MODE creation for the DB file when tying
