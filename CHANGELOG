@@ -1,4 +1,12 @@
 ----------------------------
+revision : 0.55
+date : 2008/9/24 13:22:05
+add serialize feature
+----------------------------
+revision : 0.50
+date : 2008/6/19 16:06:20
+add delete_on_error and exit_on_error parameter 
+----------------------------
 revision : 0.48
 date : 2008/6/16 15:00:42
 add UNSHIFT feature

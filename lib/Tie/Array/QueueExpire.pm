@@ -3,8 +3,8 @@ package Tie::Array::QueueExpire;
 # Tie::Array::QueueExpire package
 # Gnu GPL2 license
 #
-# $Id: QueueExpire.pm 49 2008-06-18 07:54:31Z fabrice $
-# $Revision: 49 $
+# $Id: QueueExpire.pm 55 2008-09-24 11:22:05Z fabrice $
+# $Revision: 55 $
 #
 # Fabrice Dulaunoy <fabrice@dulaunoy.com>
 ###########################################################
@@ -15,7 +15,7 @@ package Tie::Array::QueueExpire;
 =head1  Tie::Array::QueueExpire - Introduction
 
   Tie::Array::QueueExpire - Tie an ARRAY over a TokyCabinet Btree DB ( see http://tokyocabinet.sourceforge.net )
-  $Revision: 49 $
+  $Revision: 55 $
 
 =head1 SYNOPSIS
 
@@ -40,7 +40,7 @@ package Tie::Array::QueueExpire;
 
   Tie an ARRAY over a TokyCabinet Btree DB and allow to get or deleted expired data;
   
-  This module require Time::hiRes, TokyoCabinet database and perl module.
+  This module require Time::HiRes, TokyoCabinet (database and perl module.)
   
   The normal ARRAY function present are
   
@@ -76,7 +76,7 @@ use 5.008008;
 use strict;
 use warnings;
 use Tie::Array;
-use Time::HiRes qw{ time };
+use Time::HiRes qw{ gettimeofday };
 require Exporter;
 
 use Carp;
@@ -84,7 +84,7 @@ use TokyoCabinet;
 
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 
-$VERSION = sprintf "0.%02d", '$Revision: 49 $ ' =~ /(\d+)/;
+$VERSION = sprintf "0.%02d", '$Revision: 55 $ ' =~ /(\d+)/;
 
 our @ISA = qw( Exporter Tie::StdArray );
 
@@ -97,8 +97,14 @@ I< >
 	Tie an array over a DB
 	my $t = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb' );
 	The fist parameter if the TokyoCabinet file used (or created)
-	A second optional parameter allow to set the permission in octal of the DB created
-	The default permisscion is 0600 (-rw-------) 
+        Four optional parameter are allowed
+	In place two, a flag to serialize the data in the DB
+	In place three, an octal MASK allow to set the permission of the DB created
+		The default permisscion is 0600 (-rw-------) 
+        In place four a parameter to delete the DB file if present and corrupted
+       		The default value is 0 (don't delete the file)
+	In place five a parameter to exit on error when opening the DB file
+       		The default value is 0 (don't exit, only report error)
       
 =cut
 
@@ -106,16 +112,55 @@ sub TIEARRAY
 {
     my $class = $_[0];
     my %data;
-    $data{ _file } = $_[1];
-    $data{ _mode } = $_[2] || 0600;
+    $data{ _file }            = $_[1];
+    $data{ _serialize }       = $_[2] || 0;
+    $data{ _mode }            = $_[3] || 0600;
+    $data{ _delete_on_error } = $_[4] || 0;
+    $data{ _exit_on_error }   = $_[5] || 0;
     my $bdb = TokyoCabinet::BDB->new();
-    if ( !$bdb->open( $data{ _file }, $bdb->OWRITER | $bdb->OCREAT ) )
+    $bdb->setcmpfunc( $bdb->CMPDECIMAL );
+    my $serialiser;
+
+    if ( $data{ _serialize } )
+    {
+        use Data::Serializer;
+        $serialiser = Data::Serializer->new( compress => 0 );
+        $data{ _serialize } = $serialiser;
+    }
+    if ( !$bdb->open( $data{ _file }, $bdb->OWRITER | $bdb->OCREAT | $bdb->ONOLCK | $bdb->OLCKNB ) )
     {
         my $ecode = $bdb->ecode();
-        croak( "open error: %s\n", $bdb->errmsg( $ecode ) );
+        if ( $data{ _delete_on_error } )
+        {
+            unlink $data{ _file };
+            if ( !$bdb->open( $data{ _file }, $bdb->OWRITER | $bdb->OCREAT | $bdb->ONOLCK | $bdb->OLCKNB ) )
+            {
+                my $ecode = $bdb->ecode();
+                if ( $data{ _exit_on_error } )
+                {
+                    croak( "open error: " . $bdb->errmsg( $ecode . "\n" ) );
+                }
+                else
+                {
+                    carp( "open error: " . $bdb->errmsg( $ecode . "\n" ) );
+                }
+            }
+        }
+        else
+        {
+            if ( $data{ _exit_on_error } )
+            {
+                croak( "open error after delete: " . $bdb->errmsg( $ecode . "\n" ) );
+            }
+            else
+            {
+                carp( "open error after delete: " . $bdb->errmsg( $ecode . "\n" ) );
+            }
+        }
     }
-    my $mode= $data{ _mode };
-    chmod $mode  ,$data{ _file }; 
+
+    my $mode = $data{ _mode };
+    chmod $mode, $data{ _file };
     $data{ _bdb } = $bdb;
     bless \%data, $class;
     return \%data;
@@ -128,16 +173,21 @@ sub TIEARRAY
       
 =cut
 
-
 sub FETCH
 {
     my $self = shift;
     my $key  = shift;
     my $bdb  = $self->{ _bdb };
     return undef unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    my $status = $cur->jump($key);
-    return $cur->val();
+    my $cur    = TokyoCabinet::BDBCUR->new( $bdb );
+    my $status = $cur->first();
+    for ( 1 .. $key )
+    {
+        $status = $cur->next();
+    }
+    my $val = $cur->val();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    return $val;
 }
 
 =head2 FETCHTIME
@@ -153,9 +203,15 @@ sub FETCHTIME
     my $key  = shift;
     my $bdb  = $self->{ _bdb };
     return undef unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    my $status = $cur->jump($key);
-    return $cur->val(), $cur->key();
+    my $cur    = TokyoCabinet::BDBCUR->new( $bdb );
+    my $status = $cur->first();
+    for ( 1 .. $key )
+    {
+        $status = $cur->next();
+    }
+    my $val = $cur->val();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    return $val, $cur->key();
 }
 
 =head2 FETCHSIZE
@@ -184,7 +240,9 @@ sub PUSH
     my $self  = shift;
     my $value = shift;
     my $bdb   = $self->{ _bdb };
-    $bdb->put( time, $value );
+    $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
+    $bdb->put( sprintf( "%010d%06d", ( gettimeofday ) ), $value );
+    $bdb->sync();
 }
 
 =head2 EXISTS
@@ -201,7 +259,7 @@ sub EXISTS
     my $bdb  = $self->{ _bdb };
     return 0 unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    return $cur->jump($key);
+    return $cur->jump( $key );
 }
 
 =head2 POP
@@ -215,9 +273,11 @@ sub POP
 {
     my $self = shift;
     my $bdb  = $self->{ _bdb };
-    my $data = $bdb->get( $self->LAST() );
+    my $val  = $bdb->get( $self->LAST() );
     $bdb->out( $self->LAST() );
-    return $data;
+    $bdb->sync();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    return $val;
 }
 
 =head2 SHIFT
@@ -231,9 +291,11 @@ sub SHIFT
 {
     my $self = shift;
     my $bdb  = $self->{ _bdb };
-    my $data = $bdb->get( $self->FIRST() );
+    my $val  = $bdb->get( $self->FIRST() );
     $bdb->out( $self->FIRST() );
-    return $data;
+    $bdb->sync();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    return $val;
 }
 
 =head2 UNSHIFT
@@ -244,13 +306,16 @@ sub SHIFT
 	
 =cut
 
-sub UNSHIFT {
+sub UNSHIFT
+{
     my $self  = shift;
     my $value = shift;
     my $bdb   = $self->{ _bdb };
     my $first = $bdb->get( $self->FIRST() );
-    $bdb->put( $first-1, $value );
- }
+    $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
+    $bdb->put( $first - 1, $value );
+    $bdb->sync();
+}
 
 =head2 CLEAR
 	
@@ -263,6 +328,7 @@ sub CLEAR
 {
     my $self = shift;
     my $bdb  = $self->{ _bdb };
+    $bdb->sync();
     return $bdb->vanish();
 }
 
@@ -319,7 +385,9 @@ sub SPLICE
         {
             for ( 1 .. $length )
             {
-                push @all, $cur->val();
+                my $val = $cur->val();
+                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+                push @all, $val;
                 $cur->out();
             }
         }
@@ -328,7 +396,9 @@ sub SPLICE
             my $max = $self->FETCHSIZE();
             for ( $offset + 1 .. $max + $length )
             {
-                push @all, $cur->val();
+                my $val = $cur->val();
+                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+                push @all, $val;
                 $cur->out();
             }
         }
@@ -344,7 +414,9 @@ sub SPLICE
         {
             for ( 1 .. $length )
             {
-                push @all, $cur->val();
+                my $val = $cur->val();
+                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+                push @all, $val;
                 $cur->out();
             }
         }
@@ -354,12 +426,18 @@ sub SPLICE
             my $ind = 0;
             for ( $offset + 1 .. $max + $length )
             {
-                push @all, $cur->val() if ( ( $cur->key() ) && ( $ind < abs $length ) );
+                if ( ( $cur->key() ) && ( $ind < abs $length ) )
+                {
+                    my $val = $cur->val();
+                    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+                    push @all, $val;
+                }
                 $cur->out();
                 $ind++;
             }
         }
     }
+    $bdb->sync();
     return @all;
 }
 
@@ -422,10 +500,13 @@ sub EXPIRE
 
     while ( $cur->key() <= $time )
     {
-        push @all, $cur->val();
+        my $val = $cur->val();
+        $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+        push @all, $val;
         $cur->out() if ( $to_del );
         $cur->next() unless ( $to_del );
     }
+    $bdb->sync();
     return @all;
 }
 
@@ -473,6 +554,23 @@ sub STORE { carp "no STORE function"; }
 
 sub STORESIZE { carp "no STORESIZE function"; }
 
+sub __serialize__
+{
+    my $self       = shift;
+    my $val        = shift;
+    my $serializer = $self->{ _serialize };
+    return $serializer->serialize( $val ) if $val;
+    return $val;
+}
+
+sub __deserialize__
+{
+    my $self       = shift;
+    my $val        = shift;
+    my $serializer = $self->{ _serialize };
+    return $serializer->deserialize( $val ) if $val;
+    return $val;
+}
 1;
 __END__
 
