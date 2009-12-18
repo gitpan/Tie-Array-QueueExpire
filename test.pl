@@ -1,103 +1,63 @@
 #!/usr/bin/perl
-
 use strict;
+use feature qw( say );
 use Data::Dumper;
-use Time::HiRes qw{ time gettimeofday};
 
-
-
-#use lib "./lib";
+use lib './lib';
 use Tie::Array::QueueExpire;
-my $max = shift;
-my $exp = shift;
-my $t   = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb', 1, 0666 );
-my @test;
 
-if ( $max )
+my $t = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb' );
+
+for ( 1 .. 10 )
 {
-    for ( 1 .. $max )
-    {
-        my $rnd = int rand 1000;
-        push @myarray, $rnd;
-        push @test,    $rnd;
-    }
+ say  "t=".time.'  '.  int (($t->PUSH( $_ . ' ' . time, 10 ))/1000);
+    sleep 1;
 }
-my $s = scalar( @myarray );
-print "size = <$s>\n";
 
-print Dumper(\@myarray);
+say "time=" . time;
+my $ex = $t->EXPIRE( 7 );
+say Dumper( $ex );
+sleep 10;
+say "time=" . time;
+my $ex = $t->EXPIRE( 7 );
+say Dumper( $ex );
 
-print Dumper(\@test);
-
-
-print "\n original tie array  and real array comparaison \n";
-print_diff( \@myarray, \@test );
-
-print "\n executing splice \n";
-my @tmp   = splice @myarray, 5 ,3;
-#my @tmp_t = splice @test,5,3;
-#
-#print "\n tie array  and real array comparaison after splice \n";
-#print_diff( \@myarray, \@test );
-#
-#print "\n tmp and tmp_t comparaison \n";
-#print_diff( \@tmp, \@tmp_t );
-#
-##print Dumper(\@myarray);
-#
-##print Dumper(\@myarray);
-##print Dumper(\@tmp);
-##print Dumper(\@test);
-##print Dumper(\@tmp_t);
-#
-#
-#for ( 0 .. $#myarray )
-#{
-#    print "data in $_ =" . $myarray[$_] . "\n";
-#}
-#
-#
-#my $data = shift @myarray;
-#my $data_t  = shift @test;
-#print "-+-+-+-+--+shifted data=$data\n";
-#
-#
-#
-#print_diff( \@myarray, \@test );
-#
-#my $data = pop @myarray;
-#my $data_t  = pop @test;
-#print "-+-+-+-+--+poped data=$data\n";
-#
-#print_diff( \@myarray, \@test );
-#
-#print "is lement 6 exist ?<" . exists( $myarray[6] ) . "> val is<" . $myarray[6] . ">\n";
-#
-#print "is lement 1000 exist ?<" . exists( $myarray[1000] ) . ">\n";
-#
-#if ( $exp )
-#{
-#    print "expired=";
-#    my @EXP =  $t->EXPIRE( $exp ) ;
-#    print "number of elements oldest than the expiration time = ".scalar @EXP . "\t deleted=";
-#    my @EXPD =  $t->EXPIRE( $exp, 1 ) ;
-#    print "number of elements deleted by expiration = ".scalar @EXP . "\n";
-#}
-#
-#print "After expiration " .Dumper( \@myarray );
-#$t->OPTIMIZE();
-#
-sub print_diff
+say      "toto=".time.'  '.  int (($t->PUSH( 'toto' . ' ' . time, 2 ))/1000);
+for ( 11 .. 20 )
 {
-    my $array1 = shift;
-    my $array2 = shift;
-    my @ARRAY1 = @{ $array1 };
-    my @ARRAY2 = @{ $array2 };
-    my $ind    = 0;
-    foreach ( @ARRAY1 )
-    {
-        print "$ind\t<" . $ARRAY1[$ind] . ">\t<" . $ARRAY2[$ind] . ">\n";
-	$ind++;
-    }
-
+   say   "t=".time.'  '.  int (( $t->PUSH( $_ . ' ' . time ))/1000);
+    sleep 1;
 }
+say "time=" . time ;
+$ex = $t->EXPIRE( 7 );
+say Dumper( $ex );
+sleep 5;
+
+say Dumper( @myarray );
+$ex =  $t->EXPIRE(20,1);
+say Dumper($ex);
+
+say "time=" . time;
+$ex = $t->EXPIRE( 7 );
+say Dumper( $ex );
+say  "t=".time.'  '. int (( $t->PUSH( 'tata' . ' ' . time, -14 ))/1000);
+for ( 1 .. 10 )
+{
+ say  "t=".time.'  '.  int (($t->PUSH( $_ . ' ' . time, 10 ))/1000);
+    sleep 1;
+}
+
+say Dumper( @myarray );
+
+my $a =$t->FETCH(6);
+my @b = $t->FETCH(6);
+my @c=$myarray[6];
+
+say Dumper( $a );
+say Dumper( \@b );
+say Dumper( \@c );
+
+my $l = $t->LAST;
+say $l;
+say Dumper($t->LAST);
+say scalar ($t->FIRST);

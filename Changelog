@@ -1,4 +1,10 @@
 ----------------------------
+revision : 1.01
+date : 2009/12/18 15:18:33
+use the expiration value in EXPIRE and not a absolute ticks
+remove FETCHTIME and PUSHTIME ( and use extra parameter to put of fetch at a specific offset)
+ FETCH, LAST, FISRT, POP, and SHIFT return the value in scalar context, in array context return ( key, value ) 
+----------------------------
 revision : 0.55
 date : 2008/9/24 13:22:05
 add serialize feature

@@ -4,7 +4,6 @@ package Tie::Array::QueueExpire;
 # Gnu GPL2 license
 #
 # $Id: QueueExpire.pm 55 2008-09-24 11:22:05Z fabrice $
-# $Revision: 55 $
 #
 # Fabrice Dulaunoy <fabrice@dulaunoy.com>
 ###########################################################
@@ -15,7 +14,7 @@ package Tie::Array::QueueExpire;
 =head1  Tie::Array::QueueExpire - Introduction
 
   Tie::Array::QueueExpire - Tie an ARRAY over a TokyCabinet Btree DB ( see http://tokyocabinet.sourceforge.net )
-  $Revision: 55 $
+  Revision: 1.01
 
 =head1 SYNOPSIS
 
@@ -29,18 +28,40 @@ package Tie::Array::QueueExpire;
   print "this elem exists\n"  if (exists( $myarray[6]));
   print "size = ". scalar( @myarray )."\n";
   
-  
-  my $exp = 1207840028;
+  # using the PUSH with an extra parameter to put the new element in futur
+  # also return the key of the inserted value
+  for ( 1 .. 10 )
+  {
+    say  "t=".time.'  '.  int (($t->PUSH( $_ . ' ' . time, 10 ))/1000);
+    sleep 1;
+  }
+  sleep 10;  
+  # Get the expired elements ( 7 seconds before now )
+  my $ex = $t->EXPIRE( 7 );
+ 
   # Get the expired elements
   my @EXP = @{$t->EXPIRE($exp)};
-  # Delete the expired elements
+  # Get and delete the expired elements ( 20 seconds before now )
+  $ex =  $t->EXPIRE(20,1);
   my @EXP = @{$t->EXPIRE($exp,1)};
+  
+  # fetch element
+  # in scalar context return the value 
+  # in array context return in first element the key and in second, the value
+  my $a =$t->FETCH(6);
+  my @b = $t->FETCH(6);
+  # the normal array fetch is always in scalar mode
+  my @c=$myarray[6];
+  say Dumper( $a );
+  say Dumper( \@b );
+  say Dumper( \@c );
   
 =head1 DESCRIPTION
 
   Tie an ARRAY over a TokyCabinet Btree DB and allow to get or deleted expired data;
   
   This module require Time::HiRes, TokyoCabinet (database and perl module.)
+  The insertion is ms unique ( 0.001 seconds )
   
   The normal ARRAY function present are
   
@@ -68,6 +89,8 @@ package Tie::Array::QueueExpire;
   FIRST
   EXPIRE
   OPTIMIZE
+  PUSH
+  FETCH
   
  
 =cut
@@ -84,7 +107,7 @@ use TokyoCabinet;
 
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 
-$VERSION = sprintf "0.%02d", '$Revision: 55 $ ' =~ /(\d+)/;
+$VERSION = 1.01;
 
 our @ISA = qw( Exporter Tie::StdArray );
 
@@ -94,13 +117,13 @@ I< >
 	
 =head2 tie
 	
-	Tie an array over a DB
+	Tie an array over a TokyoCabinet DB
 	my $t = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb' );
 	The fist parameter if the TokyoCabinet file used (or created)
         Four optional parameter are allowed
 	In place two, a flag to serialize the data in the DB
 	In place three, an octal MASK allow to set the permission of the DB created
-		The default permisscion is 0600 (-rw-------) 
+		The default permission is 0600 (-rw-------) 
         In place four a parameter to delete the DB file if present and corrupted
        		The default value is 0 (don't delete the file)
 	In place five a parameter to exit on error when opening the DB file
@@ -170,6 +193,14 @@ sub TIEARRAY
 	
 	Retrieve a specific key from the array
 	my $data = $myarray[6];
+	or
+	my $data = $t->FETCH(6);
+	or 
+	my @data = $t->FETCH(6);
+	where 
+	  $data[0] = insertion key
+	and 
+	  $data[1] = value 
       
 =cut
 
@@ -187,31 +218,14 @@ sub FETCH
     }
     my $val = $cur->val();
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-    return $val;
-}
-
-=head2 FETCHTIME
-	
-	Retrieve a specific key from the array with the TIME tag
-	my ($data, $ticks) = $t->FETCHTIME(6);
-      
-=cut
-
-sub FETCHTIME
-{
-    my $self = shift;
-    my $key  = shift;
-    my $bdb  = $self->{ _bdb };
-    return undef unless ( $bdb->rnum() );
-    my $cur    = TokyoCabinet::BDBCUR->new( $bdb );
-    my $status = $cur->first();
-    for ( 1 .. $key )
+    if ( wantarray )
     {
-        $status = $cur->next();
+        return $cur->key(), $val;
     }
-    my $val = $cur->val();
-    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-    return $val, $cur->key();
+    else
+    {
+        return $val;
+    }
 }
 
 =head2 FETCHSIZE
@@ -232,6 +246,12 @@ sub FETCHSIZE
 	
 	Add an element at the end of the array
 	push @myarray , 45646;
+	or 
+	$t->PUSH( 45646 );
+	it is also possible to add an elemnt with a offset expiration 
+	$t->PUSH( 45646 , 10 );
+	add element in the array to be expired in 10 seconds
+	if the offset is negative, add the expiration in past
       
 =cut
 
@@ -239,16 +259,23 @@ sub PUSH
 {
     my $self  = shift;
     my $value = shift;
+    my $time  = shift || 0;
     my $bdb   = $self->{ _bdb };
     $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
-    $bdb->put( sprintf( "%010d%06d", ( gettimeofday ) ), $value );
+    my ( $sec, $usec ) = gettimeofday;
+    $sec += $time if ( $time != 0 );
+    $usec = int( $usec / 1000 );
+    my $k = sprintf( "%010d%03d", $sec, $usec );
+    $bdb->put( $k, $value );
     $bdb->sync();
+    return $k;
 }
 
 =head2 EXISTS
 	
 	Test if en element in the array exist
 	print "element exists\n" if (exits $myarray[5]);
+	return the insertion key
       
 =cut
 
@@ -266,43 +293,73 @@ sub EXISTS
 	
 	Extract the latest element from the array (the youngest)
 	my $data = pop @myarray;
-      
+      	or
+	my $data = $t->POP();
+	or 
+	my @data = $t->POP();
+	where 
+	  $data[0] = insertion key
+	and 
+	  $data[1] = value 
 =cut
 
 sub POP
 {
     my $self = shift;
     my $bdb  = $self->{ _bdb };
-    my $val  = $bdb->get( $self->LAST() );
-    $bdb->out( $self->LAST() );
+    my $key  = ( $self->LAST() )[0];
+    my $val  = $bdb->get( $key );
+    $bdb->out( $key );
     $bdb->sync();
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-    return $val;
+    if ( wantarray )
+    {
+        return $key, $val;
+    }
+    else
+    {
+        return $val;
+    }
 }
 
 =head2 SHIFT
 	
 	Extract the first element from the array  (the oldest)
-	my $data = pop @myarray;
-      
+	my $data = shift @myarray;
+	or
+	my $data = $t->SHIFT();
+	or 
+	my @data = $t->SHIFT();
+       where 
+	  $data[0] = insertion key
+	and 
+	  $data[1] = value 
 =cut
 
 sub SHIFT
 {
     my $self = shift;
     my $bdb  = $self->{ _bdb };
-    my $val  = $bdb->get( $self->FIRST() );
-    $bdb->out( $self->FIRST() );
+    my $key  = ( $self->FIRST() )[0];
+    my $val  = $bdb->get( $key );
+    $bdb->out( $key );
     $bdb->sync();
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-    return $val;
+    if ( wantarray )
+    {
+        return $key, $val;
+    }
+    else
+    {
+        return $val;
+    }
 }
 
 =head2 UNSHIFT
 	
 	Add an element in the front of the array
 	unshift @myarray , 45646;
-	UNSHIFT data 1 second before the first item
+	UNSHIFT data 1 mili-second before the first item
 	
 =cut
 
@@ -315,6 +372,7 @@ sub UNSHIFT
     $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
     $bdb->put( $first - 1, $value );
     $bdb->sync();
+    return $first - 1;
 }
 
 =head2 CLEAR
@@ -444,8 +502,13 @@ sub SPLICE
 =head2 LAST
 	
 	Get the latest element in the array (oldest)
-	my $data =$t->LAST;
-      
+	my $data = $t->LAST;
+        or
+        my @data = $t->LAST;
+	where 
+	  $data[0] = insertion key
+	and 
+	  $data[1] = value 
 =cut
 
 sub LAST
@@ -455,14 +518,28 @@ sub LAST
     return undef unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
     $cur->last();
-    return $cur->key();
+    my $val = $cur->val();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    if ( wantarray )
+    {
+        return $cur->key(), $val;
+    }
+    else
+    {
+        return $val;
+    }
 }
 
 =head2 FIRST
 	
 	Get the first element in the array (youngest)
-	my $data =$t->LAST;
-      
+	my $data =$t->FIRST;
+        or
+        my @data = $t->FIRST;
+	where 
+	  $data[0] = insertion key
+	and 
+	  $data[1] = value 
 =cut
 
 sub FIRST
@@ -472,7 +549,16 @@ sub FIRST
     return undef unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
     $cur->first();
-    return $cur->key();
+    my $val = $cur->val();
+    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    if ( wantarray )
+    {
+        return $cur->key(), $val;
+    }
+    else
+    {
+        return $val;
+    }
 }
 
 =head2 EXPIRE
@@ -489,25 +575,33 @@ sub FIRST
 
 sub EXPIRE
 {
-    my $self   = shift;
-    my $time   = shift;
-    my $to_del = shift;
+    my $self = shift;
+    my $time = shift;
+    $time = time - $time;
+    $time *= 1000;
+    my $to_del = shift || 0;
     my $bdb    = $self->{ _bdb };
-    my @all;
+    my @all    = ();
+
     return \@all unless ( $bdb->rnum() );
     my $cur = TokyoCabinet::BDBCUR->new( $bdb );
     $cur->first();
-
     while ( $cur->key() <= $time )
     {
         my $val = $cur->val();
         $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
         push @all, $val;
-        $cur->out() if ( $to_del );
-        $cur->next() unless ( $to_del );
+        if ( $to_del )
+        {
+            last unless ( $cur->out() );
+        }
+        else
+        {
+            last unless ( $cur->next() );
+        }
     }
     $bdb->sync();
-    return @all;
+    return \@all;
 }
 
 =head2 OPTIMIZE
@@ -612,7 +706,7 @@ __END__
 	Free Software Foundation, Inc., 59 Temple Place, 
 	Suite 330, Boston, MA 02111-1307 USA
 
-	Tie::Array::QueueExpire  Copyright (C) 2004 2005 2006 2007 DULAUNOY Fabrice  
+	Tie::Array::QueueExpire  Copyright (C) 2004 2005 2006 2007 2008 2009 2010 DULAUNOY Fabrice  
 	Tie::Array::QueueExpire comes with ABSOLUTELY NO WARRANTY; 
 	for details See: L<http://www.gnu.org/licenses/gpl.html> 
 	This is free software, and you are welcome to redistribute 

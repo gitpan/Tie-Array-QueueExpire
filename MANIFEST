@@ -4,4 +4,4 @@ lib/Tie/Array/QueueExpire.pm    Is a minimalist RPN parser/processor (a little l
 README             	   	Read this first
 test.pl                   	Basic test script
 META.yml                   	Module meta-data (added by MakeMaker)
-CHANGELOG
+Changelog
