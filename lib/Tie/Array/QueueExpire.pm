@@ -3,7 +3,6 @@ package Tie::Array::QueueExpire;
 # Tie::Array::QueueExpire package
 # Gnu GPL2 license
 #
-# $Id: QueueExpire.pm 55 2008-09-24 11:22:05Z fabrice $
 #
 # Fabrice Dulaunoy <fabrice@dulaunoy.com>
 ###########################################################
@@ -11,14 +10,18 @@ package Tie::Array::QueueExpire;
 #
 ###########################################################
 
-=head1  Tie::Array::QueueExpire - Introduction
+=head1  NAME
 
-  Tie::Array::QueueExpire - Tie an ARRAY over a TokyCabinet Btree DB ( see http://tokyocabinet.sourceforge.net )
-  Revision: 1.01
+  Tie::Array::QueueExpire - Introduction
+
+
+  Tie an ARRAY over a SQLite  DB with expiration of elements
+  Revision: 1.03
 
 =head1 SYNOPSIS
 
   use Tie::Array::QueueExpire;
+  use Data::Dumper;
   my $t = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb' );
   push @myarray, int rand 1000;
   
@@ -55,6 +58,8 @@ package Tie::Array::QueueExpire;
   say Dumper( $a );
   say Dumper( \@b );
   say Dumper( \@c );
+  # a convenient way to get all the elements from the array directly by the object
+  my @all = $t->SLICE();
   
 =head1 DESCRIPTION
 
@@ -65,17 +70,19 @@ package Tie::Array::QueueExpire;
   
   The normal ARRAY function present are
   
-  push
-  pop
-  shift
-  exits
-  scalar
+  push    PUSH   ( the object call allow to PUSH data with a specific expiration offset )
+  pop     POP    ( the object call return when called in ARRAY context an array with [ key, value ] )
+  shift   SHIFT  ( the object call return when called in ARRAY context an array with [ key, value ] )
+  exists  EXISTS
+  scalar  FETCHSIZE
   clear
-  unshift  (but put data 1 second before the first entry)
+  unshift  ( but put data 1 micro-second before the first entry)
+  DESTROY
 
   The following function is not completely iplemented.
   
-  splice
+  splice SPLICE (no replacement allowed and  the object call return when called in ARRAY context an array with [ key, value ] )
+
   
   The following function are not implemented.
   
@@ -85,13 +92,12 @@ package Tie::Array::QueueExpire;
 
   The following function are specific of this module.
   
-  LAST
-  FIRST
   EXPIRE
-  OPTIMIZE
   PUSH
   FETCH
-  
+  SLICE
+  SPLICE
+  CLEAR
  
 =cut
 
@@ -103,11 +109,13 @@ use Time::HiRes qw{ gettimeofday };
 require Exporter;
 
 use Carp;
-use TokyoCabinet;
+use DBI;
+use DBD::SQLite;
 
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 
-$VERSION = 1.01;
+$VERSION = '1.04';
+# use Data::Dumper;
 
 our @ISA = qw( Exporter Tie::StdArray );
 
@@ -117,6 +125,7 @@ I< >
 	
 =head2 tie
 	
+	
 	Tie an array over a TokyoCabinet DB
 	my $t = tie( my @myarray, "Tie::Array::QueueExpire", '/tmp/db_test.bdb' );
 	The fist parameter if the TokyoCabinet file used (or created)
@@ -124,10 +133,8 @@ I< >
 	In place two, a flag to serialize the data in the DB
 	In place three, an octal MASK allow to set the permission of the DB created
 		The default permission is 0600 (-rw-------) 
-        In place four a parameter to delete the DB file if present and corrupted
+        In place four a parameter to delete the DB file, if present, at start
        		The default value is 0 (don't delete the file)
-	In place five a parameter to exit on error when opening the DB file
-       		The default value is 0 (don't exit, only report error)
       
 =cut
 
@@ -138,53 +145,28 @@ sub TIEARRAY
     $data{ _file }            = $_[1];
     $data{ _serialize }       = $_[2] || 0;
     $data{ _mode }            = $_[3] || 0600;
-    $data{ _delete_on_error } = $_[4] || 0;
-    $data{ _exit_on_error }   = $_[5] || 0;
-    my $bdb = TokyoCabinet::BDB->new();
-    $bdb->setcmpfunc( $bdb->CMPDECIMAL );
-    my $serialiser;
+    $data{ _delete_on_start } = $_[4] || 0;
 
+    my $serialiser;
     if ( $data{ _serialize } )
     {
         use Data::Serializer;
         $serialiser = Data::Serializer->new( compress => 0 );
         $data{ _serialize } = $serialiser;
     }
-    if ( !$bdb->open( $data{ _file }, $bdb->OWRITER | $bdb->OCREAT | $bdb->ONOLCK | $bdb->OLCKNB ) )
+    my $dbfile = $data{ _file };
+    unlink $dbfile if ( -f $dbfile && $data{ _delete_on_start } );
+    my $dbh            = DBI->connect( "dbi:SQLite:dbname=$dbfile", "", "" );
+    my $sql_list_table = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;";
+    my $ary_ref        = $dbh->selectall_hashref( $sql_list_table, 'name' );
+    unless ( exists( $ary_ref->{ 'queue' } ) )
     {
-        my $ecode = $bdb->ecode();
-        if ( $data{ _delete_on_error } )
-        {
-            unlink $data{ _file };
-            if ( !$bdb->open( $data{ _file }, $bdb->OWRITER | $bdb->OCREAT | $bdb->ONOLCK | $bdb->OLCKNB ) )
-            {
-                my $ecode = $bdb->ecode();
-                if ( $data{ _exit_on_error } )
-                {
-                    croak( "open error: " . $bdb->errmsg( $ecode . "\n" ) );
-                }
-                else
-                {
-                    carp( "open error: " . $bdb->errmsg( $ecode . "\n" ) );
-                }
-            }
-        }
-        else
-        {
-            if ( $data{ _exit_on_error } )
-            {
-                croak( "open error after delete: " . $bdb->errmsg( $ecode . "\n" ) );
-            }
-            else
-            {
-                carp( "open error after delete: " . $bdb->errmsg( $ecode . "\n" ) );
-            }
-        }
+        my $sql = "CREATE TABLE queue( key text , val text );";
+        my $res = $dbh->do( $sql );
     }
-
     my $mode = $data{ _mode };
     chmod $mode, $data{ _file };
-    $data{ _bdb } = $bdb;
+    $data{ _bdb } = $dbh;
     bless \%data, $class;
     return \%data;
 }
@@ -207,20 +189,37 @@ sub TIEARRAY
 sub FETCH
 {
     my $self = shift;
-    my $key  = shift;
-    my $bdb  = $self->{ _bdb };
-    return undef unless ( $bdb->rnum() );
-    my $cur    = TokyoCabinet::BDBCUR->new( $bdb );
-    my $status = $cur->first();
-    for ( 1 .. $key )
+    my $key  = shift || 0;
+    if ( $key < 0 )
     {
-        $status = $cur->next();
+        $key += $self->FETCHSIZE();
     }
-    my $val = $cur->val();
+    $key++;
+    my $dbh      = $self->{ _bdb };
+    my $sql_view = "CREATE TEMP VIEW head_fetch AS   SELECT  * FROM queue ORDER BY key LIMIT $key;";
+    my $res      = $dbh->do( $sql_view );
+    my $count    = $dbh->selectall_arrayref( "SELECT COUNT(*) FROM head_fetch;" );
+    if ( ( $count->[0][0] ) < $key )
+    {
+        $res = $dbh->do( "DROP VIEW head_fetch " );
+        if ( wantarray )
+        {
+            return undef, undef;
+        }
+        else
+        {
+            return undef;
+        }
+    }
+    my $sql = "SELECT  * FROM head_fetch ORDER BY key DESC LIMIT 1;";
+    my $row = $dbh->selectall_arrayref( $sql );
+    my $ticks = $row->[0][0];
+    my $val   = $row->[0][1];
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    $res = $dbh->do( "DROP VIEW head_fetch " );
     if ( wantarray )
     {
-        return $cur->key(), $val;
+        return $ticks, $val;
     }
     else
     {
@@ -238,8 +237,9 @@ sub FETCH
 sub FETCHSIZE
 {
     my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    return $bdb->rnum();
+    my $dbh  = $self->{ _bdb };
+    my $row  = $dbh->selectrow_hashref( "select count(*) from queue;" );
+    return $row->{ 'count(*)' };
 }
 
 =head2 PUSH
@@ -247,9 +247,9 @@ sub FETCHSIZE
 	Add an element at the end of the array
 	push @myarray , 45646;
 	or 
-	$t->PUSH( 45646 );
+	$t->PUSH( 'some text' );
 	it is also possible to add an elemnt with a offset expiration 
-	$t->PUSH( 45646 , 10 );
+	$t->PUSH( 'some text in futur' , 10 );
 	add element in the array to be expired in 10 seconds
 	if the offset is negative, add the expiration in past
       
@@ -260,15 +260,14 @@ sub PUSH
     my $self  = shift;
     my $value = shift;
     my $time  = shift || 0;
-    my $bdb   = $self->{ _bdb };
+    my $dbh   = $self->{ _bdb };
     $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
     my ( $sec, $usec ) = gettimeofday;
     $sec += $time if ( $time != 0 );
-    $usec = int( $usec / 1000 );
-    my $k = sprintf( "%010d%03d", $sec, $usec );
-    $bdb->put( $k, $value );
-    $bdb->sync();
-    return $k;
+    my $key = sprintf( "%010d%06d", $sec, $usec );
+    my $sql = "INSERT INTO queue ( key , val ) VALUES ( '$key','$value' );";
+    my $res = $dbh->do( $sql );
+    return $key;
 }
 
 =head2 EXISTS
@@ -283,10 +282,8 @@ sub EXISTS
 {
     my $self = shift;
     my $key  = shift;
-    my $bdb  = $self->{ _bdb };
-    return 0 unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    return $cur->jump( $key );
+    my $dbh  = $self->{ _bdb };
+    return ( $self->FETCH( $key ) );
 }
 
 =head2 POP
@@ -306,15 +303,17 @@ sub EXISTS
 sub POP
 {
     my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    my $key  = ( $self->LAST() )[0];
-    my $val  = $bdb->get( $key );
-    $bdb->out( $key );
-    $bdb->sync();
+    my $dbh  = $self->{ _bdb };
+    my $sql = "SELECT  * FROM queue ORDER BY key DESC LIMIT 1;";
+    my $row = $dbh->selectall_arrayref( $sql );
+    my $ticks = $row->[0][0];
+    my $val   = $row->[0][1];
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    my $sql_del = "DELETE FROM queue WHERE key = $ticks;";
+    my $res     = $dbh->do( $sql_del );
     if ( wantarray )
     {
-        return $key, $val;
+        return $ticks, $val;
     }
     else
     {
@@ -339,15 +338,17 @@ sub POP
 sub SHIFT
 {
     my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    my $key  = ( $self->FIRST() )[0];
-    my $val  = $bdb->get( $key );
-    $bdb->out( $key );
-    $bdb->sync();
+    my $dbh  = $self->{ _bdb };
+    my $sql  = "SELECT  * FROM queue ORDER BY key  LIMIT 1;";
+    my $row  = $dbh->selectall_arrayref( $sql );
+    my $ticks = $row->[0][0];
+    my $val   = $row->[0][1];
     $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    my $sql_del = "DELETE FROM queue WHERE key = $ticks;";
+    my $res     = $dbh->do( $sql_del );
     if ( wantarray )
     {
-        return $key, $val;
+        return $ticks, $val;
     }
     else
     {
@@ -367,12 +368,16 @@ sub UNSHIFT
 {
     my $self  = shift;
     my $value = shift;
-    my $bdb   = $self->{ _bdb };
-    my $first = $bdb->get( $self->FIRST() );
+    my $dbh   = $self->{ _bdb };
+    my ( $k, $val ) = $self->FETCH( 0 );
+    my $sec = substr $k, 0, 10;
+    my $usec = substr $k, 10;
+    $usec--;
+    my $key = sprintf( "%010d%06d", $sec, $usec );
     $value = $self->__serialize__( $value ) if ( $self->{ _serialize } );
-    $bdb->put( $first - 1, $value );
-    $bdb->sync();
-    return $first - 1;
+    my $sql = "INSERT INTO queue ( key , val ) VALUES ( '$key','$value' );";
+    my $res = $dbh->do( $sql );
+    return $key;
 }
 
 =head2 CLEAR
@@ -384,10 +389,11 @@ sub UNSHIFT
 
 sub CLEAR
 {
-    my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    $bdb->sync();
-    return $bdb->vanish();
+    my $self    = shift;
+    my $dbh     = $self->{ _bdb };
+    my $sql_del = "DELETE FROM queue;";
+    my $res     = $dbh->do( $sql_del );
+    return $res;
 }
 
 =head2 DESTROY
@@ -400,8 +406,8 @@ sub CLEAR
 sub DESTROY
 {
     my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    $bdb->close();
+    my $dbh  = $self->{ _bdb };
+    $dbh->disconnect;
 }
 
 =head1 Specific functions from this module
@@ -412,8 +418,11 @@ I< >
 	
 	SPLICE don't allow a list replacement 
 	because the insert order is made by time.
+	in scalar context return the latest element 
+	in array context return all the elements selected
 	my @tmp   = splice @myarray, 5 ,3;
-	
+	or
+	my @res = $t->SPLICE( 1 , 7 );
 =cut
 
 sub SPLICE
@@ -421,144 +430,78 @@ sub SPLICE
     my $self   = shift;
     my $offset = shift || 0;
     my $length = shift || 0;
-    my $bdb    = $self->{ _bdb };
-    my @all;
-    unless ( $offset + $length )
+    my $dbh    = $self->{ _bdb };
+    if ( $length == 0 )
     {
-        $self->CLEAR;
-        return @all;
+       $length = $self->FETCHSIZE();
     }
-    return \@all unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-
-    if ( $offset > 0 )
+    if ( $offset < 0 )
     {
-        $cur->first();
-        for ( 1 .. $offset )
-        {
-            $cur->next();
-        }
-
-        if ( $length > 0 )
-        {
-            for ( 1 .. $length )
-            {
-                my $val = $cur->val();
-                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-                push @all, $val;
-                $cur->out();
-            }
-        }
-        else
-        {
-            my $max = $self->FETCHSIZE();
-            for ( $offset + 1 .. $max + $length )
-            {
-                my $val = $cur->val();
-                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-                push @all, $val;
-                $cur->out();
-            }
-        }
+        $offset += $self->FETCHSIZE();
     }
-    else
-    {
-        $cur->last();
-        for ( $offset + 2 .. 0 )
-        {
-            $cur->prev();
-        }
-        if ( $length > 0 )
-        {
-            for ( 1 .. $length )
-            {
-                my $val = $cur->val();
-                $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-                push @all, $val;
-                $cur->out();
-            }
-        }
-        else
-        {
-            my $max = $self->FETCHSIZE();
-            my $ind = 0;
-            for ( $offset + 1 .. $max + $length )
-            {
-                if ( ( $cur->key() ) && ( $ind < abs $length ) )
-                {
-                    my $val = $cur->val();
-                    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-                    push @all, $val;
-                }
-                $cur->out();
-                $ind++;
-            }
-        }
-    }
-    $bdb->sync();
-    return @all;
-}
+    my $key      = $offset + $length;
+    my $sql_view = "CREATE TEMP VIEW head_splice AS   SELECT  * FROM queue ORDER BY key LIMIT $key;";
+    my $res      = $dbh->do( $sql_view );
+#    my $count = $dbh->selectall_arrayref( "SELECT COUNT(*) FROM head_splice;" );
 
-=head2 LAST
-	
-	Get the latest element in the array (oldest)
-	my $data = $t->LAST;
-        or
-        my @data = $t->LAST;
-	where 
-	  $data[0] = insertion key
-	and 
-	  $data[1] = value 
-=cut
-
-sub LAST
-{
-    my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    return undef unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->last();
-    my $val = $cur->val();
-    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    my $sql = "SELECT  * FROM head_splice ORDER BY key DESC LIMIT $length;";
+    my ( $start, undef ) = $self->FETCH( $offset );
+    my ( $end,   undef ) = $self->FETCH( $key );
     if ( wantarray )
     {
-        return $cur->key(), $val;
+        my $row = $dbh->selectall_arrayref( $sql );
+        $res = $dbh->do( "DROP VIEW head_splice " );
+        my $sql_del = "DELETE FROM queue WHERE key >= $start AND key < $end;";
+        my $res     = $dbh->do( $sql_del );
+        return sort { $a->[0] <=> $b->[0] } @{ $row };
     }
-    else
-    {
-        return $val;
-    }
+    my $row = $dbh->selectcol_arrayref( $sql, { Columns => [2] } );
+    $res = $dbh->do( "DROP VIEW head_splice " );
+    my $sql_del = "DELETE FROM queue WHERE key >= $start AND key < $end;";
+    $res = $dbh->do( $sql_del );
+    my @REVERSED = reverse @$row;
+    return \@REVERSED;
 }
 
-=head2 FIRST
+=head2 SLICE
 	
-	Get the first element in the array (youngest)
-	my $data =$t->FIRST;
-        or
-        my @data = $t->FIRST;
-	where 
-	  $data[0] = insertion key
-	and 
-	  $data[1] = value 
+	SLICE like SPLICE but don't delete elements
+	in scalar context return the latest element 
+	in array context return all the elements selected
+	
+	my @res = $t->SPLICE( 1 , 7 );
+	
 =cut
 
-sub FIRST
+sub SLICE
 {
-    my $self = shift;
-    my $bdb  = $self->{ _bdb };
-    return undef unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->first();
-    my $val = $cur->val();
-    $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
+    my $self   = shift;
+    my $offset = shift || 0;
+    my $length = shift || 0;
+    my $dbh    = $self->{ _bdb };
+    if ( $length == 0 )
+    {
+       $length = $self->FETCHSIZE();
+    }
+    if ( $offset < 0 )
+    {
+        $offset += $self->FETCHSIZE();
+    }
+    my $key      = $offset + $length;
+    my $sql_view = "CREATE TEMP VIEW head_slice AS   SELECT  * FROM queue ORDER BY key LIMIT $key;";
+    my $res      = $dbh->do( $sql_view );
+#     my $count = $dbh->selectall_arrayref( "SELECT COUNT(*) FROM head_slice;" );
+    my $sql = "SELECT  * FROM head_slice ORDER BY key DESC LIMIT $length;";
     if ( wantarray )
     {
-        return $cur->key(), $val;
+        my $row = $dbh->selectall_arrayref( $sql );
+        $res = $dbh->do( "DROP VIEW head_slice " );
+        return sort { $a->[0] <=> $b->[0] } @{ $row };
     }
-    else
-    {
-        return $val;
-    }
+    my $row = $dbh->selectcol_arrayref( $sql, { Columns => [2] } );
+    $res = $dbh->do( "DROP VIEW head_slice " );
+    my @REVERSED = reverse @$row;
+    return \@REVERSED;
 }
 
 =head2 EXPIRE
@@ -577,46 +520,24 @@ sub EXPIRE
 {
     my $self = shift;
     my $time = shift;
-    $time = time - $time;
-    $time *= 1000;
     my $to_del = shift || 0;
-    my $bdb    = $self->{ _bdb };
-    my @all    = ();
-
-    return \@all unless ( $bdb->rnum() );
-    my $cur = TokyoCabinet::BDBCUR->new( $bdb );
-    $cur->first();
-    while ( $cur->key() <= $time )
+     my $dbh      = $self->{ _bdb };
+    
+    my ( $sec, $usec ) = gettimeofday;
+    $sec += $time if ( $time != 0 );
+    my $key = sprintf( "%010d%06d", $sec, $usec );
+    my $sql = "SELECT  * FROM queue WHERE key <= $key ORDER BY key ;";    
+    if ( wantarray )
     {
-        my $val = $cur->val();
-        $val = $self->__deserialize__( $val ) if ( $self->{ _serialize } );
-        push @all, $val;
-        if ( $to_del )
-        {
-            last unless ( $cur->out() );
-        }
-        else
-        {
-            last unless ( $cur->next() );
-        }
+        my $row = $dbh->selectall_arrayref( $sql );
+        my $res = $dbh->do( "DELETE FROM queue WHERE key <= $key;") if ($to_del) ;
+        return sort { $a->[0] <=> $b->[0] } @{ $row };
     }
-    $bdb->sync();
-    return \@all;
-}
-
-=head2 OPTIMIZE
-	
-	Function to compact the DB (after a lot of delete )
-	$t->OPTIMIZE;
-=cut
-
-sub OPTIMIZE
-{
-    my $self = shift;
-    my ( $lmemb, $nmemb, $bnum, $apow, $fpow, $opts ) = ( @_ );
-    my $bdb = $self->{ _bdb };
-    $bdb->optimize( $lmemb, $nmemb, $bnum, $apow, $fpow, $opts );
-    chmod $self->{ _mode }, $self->{ _file };
+    my $row = $dbh->selectcol_arrayref( $sql, { Columns => [2] } );
+    my $res = $dbh->do( "DELETE FROM queue WHERE key <= $key;") if ($to_del) ;
+    my @REVERSED =  @$row;
+    return \@REVERSED;
+   
 }
 
 =head1 Functions not Implemented

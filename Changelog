@@ -1,4 +1,9 @@
 ----------------------------
+revision : 1.02
+date : 2009/12/21 11:44:18
+correct code for SPLICE
+add SLICE code ( to allow use of $t->SLICE() to easilly get all the elements from the object
+----------------------------
 revision : 1.01
 date : 2009/12/18 15:18:33
 use the expiration value in EXPIRE and not a absolute ticks

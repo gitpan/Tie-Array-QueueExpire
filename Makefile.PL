@@ -8,6 +8,5 @@ WriteMakefile(
      VERSION_FROM => 'lib/Tie/Array/QueueExpire.pm', # finds $VERSION
      ABSTRACT       => 'Tie::Array::QueueExpire Is a tie ARRAY over a TokyoCabinet::BDB database with expiration function',
      dist => { COMPRESS=>"gzip -f", SUFFIX=>"gz" }, 
-     PREREQ_PM => { 'TokyoCabinet' , 'Time::HiRes' },
-     PREREQ_FATAL => 1,
+     PREREQ_PM => { 'DBD::SQLite' => 0 , 'Time::HiRes' => 0 },
 );
